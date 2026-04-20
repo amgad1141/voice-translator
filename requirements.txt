@@ -1,0 +1,26 @@
+# Voice Translator — Python dependencies
+# Install with: pip install -r requirements.txt --break-system-packages
+
+# ── Audio ────────────────────────────────
+sounddevice>=0.4.6
+scipy>=1.11.0
+numpy>=1.24.0
+
+# ── UI ───────────────────────────────────
+customtkinter>=5.2.0
+
+# ── Whisper engines ──────────────────────
+# PyTorch with CUDA 12.x (required for GPU acceleration)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.1.0
+torchaudio>=2.1.0
+
+# Faster-Whisper (CTranslate2-based, primary engine)
+faster-whisper>=1.0.0
+
+# OpenAI Whisper (optional fallback, much slower)
+# openai-whisper>=20231117
+
+# ── Grammar polishing ───────────────────
+transformers>=4.36.0
+sentencepiece>=0.1.99

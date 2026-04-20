@@ -1,0 +1,30 @@
+# ── AI Models (too large for git, ~5 GB) ──────────────
+# These are downloaded automatically by setup.ps1 or on first app launch
+models/
+
+# ── Runtime data ──────────────────────────────────────
+data/
+gpu_config.json
+
+# ── ffmpeg binaries (user downloads separately) ──────
+ffmpeg*
+
+# ── Python cache ──────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── OS files ──────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── IDE ───────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
