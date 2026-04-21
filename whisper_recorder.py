@@ -264,6 +264,9 @@ class FasterWhisperEngine:
         self.model = WhisperModel(model_name, device="cuda", compute_type=GPU_COMPUTE_TYPE)
         self.name = f"Faster-Whisper ({model_name})"
     def translate(self, path):
+        # Clear any leftover VRAM before translating (prevents OOM on long recordings)
+        if torch and torch.cuda.is_available():
+            torch.cuda.empty_cache()
         segs, _ = self.model.transcribe(path, language="ar", task="translate")
         return " ".join(s.text for s in segs).strip()
 
@@ -560,6 +563,7 @@ class TranslatorApp(ctk.CTk):
 
     # ── Translation ──────────────────────────────────────────────
     def _translate(self):
+        tmp = None
         try:
             audio = np.concatenate(self.audio_data, axis=0).flatten()
             silence = np.zeros(int(self.sample_rate * 0.5), dtype=audio.dtype)
@@ -567,8 +571,26 @@ class TranslatorApp(ctk.CTk):
             tmp = os.path.join(tempfile.gettempdir(), "whisper_temp.wav")
             wav.write(tmp, self.sample_rate, (audio * 32767).astype(np.int16))
 
+            # Unload grammar model from GPU before translating to free VRAM
+            if self.polisher and self.polisher.loaded and self.polisher.device == "cuda":
+                self.polisher.model = self.polisher.model.to("cpu")
+                self.polisher.device = "cpu"
+                if torch and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
             t0 = time.time()
-            text = self.engine.translate(tmp)
+            try:
+                text = self.engine.translate(tmp)
+            except (RuntimeError, Exception) as e:
+                if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                    # OOM: clear VRAM and retry once
+                    self.set_status("⚠ VRAM full — clearing and retrying...")
+                    if torch and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    time.sleep(1)
+                    text = self.engine.translate(tmp)
+                else:
+                    raise
             tt = round(time.time()-t0, 1)
 
             pt = 0
@@ -592,11 +614,21 @@ class TranslatorApp(ctk.CTk):
             self.set_status(s)
 
         except Exception as e:
-            self.set_status(f"Error: {e}")
+            # Save the recording so it's NOT lost
+            try:
+                backup = os.path.join(DATA_DIR, f"recording_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav")
+                if tmp and os.path.exists(tmp):
+                    shutil.copy2(tmp, backup)
+                    self.set_status(f"Error: {e} — audio saved to data/ folder")
+                else:
+                    self.set_status(f"Error: {e}")
+            except:
+                self.set_status(f"Error: {e}")
         finally:
             self.after(0, lambda: self.record_btn.configure(state="normal"))
-            try: os.remove(tmp)
-            except: pass
+            if tmp:
+                try: os.remove(tmp)
+                except: pass
 
     # ── Helpers ───────────────────────────────────────────────────
     def set_status(self, t): self.status_label.configure(text=t)
