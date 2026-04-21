@@ -380,6 +380,11 @@ class TranslatorApp(ctk.CTk):
             corner_radius=28, command=self.toggle_recording, state="disabled")
         self.record_btn.pack(side="left", padx=5)
 
+        self.import_btn = ctk.CTkButton(rec_frame, text="📂", width=40, height=40,
+            font=ctk.CTkFont(size=16), fg_color=BLUE, hover_color="#1a4a8a",
+            corner_radius=20, command=self.import_audio, state="disabled")
+        self.import_btn.pack(side="left", padx=(8, 0))
+
         self.timer_label = ctk.CTkLabel(rec_frame, text="", font=ctk.CTkFont(size=16, weight="bold"),
             text_color=ORANGE, width=70)
         self.timer_label.pack(side="left", padx=(10, 0))
@@ -465,12 +470,14 @@ class TranslatorApp(ctk.CTk):
                 self.engine = FasterWhisperEngine(model, self.set_status)
                 self.set_status(f"✓ Ready — {self.engine.name}")
                 self.after(0, lambda: self.record_btn.configure(state="normal"))
+                self.after(0, lambda: self.import_btn.configure(state="normal"))
                 self.after(0, lambda m=model: self.model_var.set(m))
             elif "Whisper" in ENGINES:
                 self.set_status("⏳ Loading model into GPU...")
                 self.engine = WhisperEngine(model, self.set_status)
                 self.set_status(f"✓ Ready — {self.engine.name}")
                 self.after(0, lambda: self.record_btn.configure(state="normal"))
+                self.after(0, lambda: self.import_btn.configure(state="normal"))
                 self.after(0, lambda m=model: self.model_var.set(m))
 
             threading.Thread(target=self._bg_grammar, daemon=True).start()
@@ -560,6 +567,74 @@ class TranslatorApp(ctk.CTk):
         self.timer_label.configure(text="")
         self.set_status("⏳ Translating...")
         threading.Thread(target=self._translate, daemon=True).start()
+
+    # ── Import audio file ────────────────────────────────────────
+    def import_audio(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="Select audio file to translate",
+            initialdir=DATA_DIR,
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.m4a *.flac *.ogg *.wma *.aac"),
+                ("WAV files", "*.wav"),
+                ("All files", "*.*")
+            ])
+        if not path: return
+        self.record_btn.configure(state="disabled")
+        self.import_btn.configure(state="disabled")
+        fname = os.path.basename(path)
+        self.set_status(f"⏳ Translating {fname}...")
+        threading.Thread(target=self._translate_file, args=(path,), daemon=True).start()
+
+    def _translate_file(self, path):
+        """Translate an imported audio file (same logic as _translate but from file)."""
+        try:
+            # Unload grammar from GPU to free VRAM
+            if self.polisher and self.polisher.loaded and self.polisher.device == "cuda":
+                self.polisher.model = self.polisher.model.to("cpu")
+                self.polisher.device = "cpu"
+                if torch and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            t0 = time.time()
+            try:
+                text = self.engine.translate(path)
+            except (RuntimeError, Exception) as e:
+                if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                    self.set_status("⚠ VRAM full — clearing and retrying...")
+                    if torch and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    time.sleep(1)
+                    text = self.engine.translate(path)
+                else:
+                    raise
+            tt = round(time.time()-t0, 1)
+
+            pt = 0
+            if self.polish_var.get() and self.polisher and self.polisher.loaded:
+                self.set_status("⏳ Polishing grammar...")
+                t0 = time.time(); text = self.polisher.polish(text); pt = round(time.time()-t0, 1)
+
+            self.text_box.delete("1.0", "end")
+            self.text_box.insert("1.0", text)
+
+            self.clipboard_clear(); self.clipboard_append(text)
+            self.after(0, lambda: self.autocopy_label.configure(text="✓ Auto-copied!"))
+            self.after(3000, lambda: self.autocopy_label.configure(text=""))
+
+            self.history.add(text, self.engine.name, round(tt+pt, 1), pt > 0)
+            self.after(0, self.refresh_history_display)
+
+            s = f"✓ {tt}s"
+            if pt > 0: s += f" + polish {pt}s"
+            s += f" (from file)"
+            self.set_status(s)
+
+        except Exception as e:
+            self.set_status(f"Error: {e}")
+        finally:
+            self.after(0, lambda: self.record_btn.configure(state="normal"))
+            self.after(0, lambda: self.import_btn.configure(state="normal"))
 
     # ── Translation ──────────────────────────────────────────────
     def _translate(self):
