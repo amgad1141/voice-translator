@@ -319,7 +319,7 @@ class TranslatorApp(ctk.CTk):
         self.resizable(True, True)
         self.minsize(550, 580)
 
-        self.recording = False; self.audio_data = []; self.sample_rate = 16000
+        self.recording = False; self.paused = False; self.audio_data = []; self.sample_rate = 16000
         self.engine = None; self.polisher = None; self.record_start_time = 0
         self.stream = None; self.history = TranslationHistory()
         self.mic_devices = {}
@@ -375,10 +375,15 @@ class TranslatorApp(ctk.CTk):
         rec_frame = ctk.CTkFrame(self, fg_color=BG)
         rec_frame.pack(pady=(2, 2))
 
-        self.record_btn = ctk.CTkButton(rec_frame, text="🎙  Record", width=220, height=55,
+        self.record_btn = ctk.CTkButton(rec_frame, text="🎙  Record", width=180, height=55,
             font=ctk.CTkFont(size=18, weight="bold"), fg_color=RED, hover_color="#c93550",
             corner_radius=28, command=self.toggle_recording, state="disabled")
         self.record_btn.pack(side="left", padx=5)
+
+        self.pause_btn = ctk.CTkButton(rec_frame, text="⏸", width=45, height=45,
+            font=ctk.CTkFont(size=18), fg_color=ORANGE, hover_color="#d97706",
+            corner_radius=22, command=self.toggle_pause)
+        # Hidden by default — shown only during recording
 
         self.import_btn = ctk.CTkButton(rec_frame, text="📂", width=40, height=40,
             font=ctk.CTkFont(size=16), fg_color=BLUE, hover_color="#1a4a8a",
@@ -537,14 +542,17 @@ class TranslatorApp(ctk.CTk):
         else: self.stop_rec()
 
     def start_rec(self):
-        self.recording = True; self.audio_data = []
-        self.record_start_time = time.time()
+        self.recording = True; self.paused = False; self.audio_data = []
+        self.record_start_time = time.time(); self.pause_total = 0; self.pause_start = 0
         self.record_btn.configure(text="⏹  Stop", fg_color=GREEN, hover_color="#00b060")
+        self.import_btn.pack_forget()
+        self.pause_btn.pack(side="left", padx=(5, 0))
+        self.pause_btn.configure(text="⏸", fg_color=ORANGE)
         self.set_status("🔴 Recording... speak now")
         self.waveform.start(); self._tick_timer()
 
         def cb(indata, frames, ti, status):
-            if self.recording:
+            if self.recording and not self.paused:
                 self.audio_data.append(indata.copy())
                 self.waveform.feed(indata.flatten())
 
@@ -553,16 +561,35 @@ class TranslatorApp(ctk.CTk):
             dtype='float32', callback=cb, blocksize=1024, device=idx)
         self.stream.start()
 
+    def toggle_pause(self):
+        if not self.recording: return
+        self.paused = not self.paused
+        if self.paused:
+            self.pause_start = time.time()
+            self.pause_btn.configure(text="▶", fg_color="#2563eb")
+            self.set_status("⏸ Paused — click ▶ to resume")
+            self.waveform.stop()
+        else:
+            self.pause_total += time.time() - self.pause_start
+            self.pause_btn.configure(text="⏸", fg_color=ORANGE)
+            self.set_status("🔴 Recording... speak now")
+            self.waveform.start()
+
     def _tick_timer(self):
         if not self.recording: return
-        e = int(time.time()-self.record_start_time)
+        elapsed = time.time() - self.record_start_time - self.pause_total
+        if self.paused:
+            elapsed -= (time.time() - self.pause_start)
+        e = max(0, int(elapsed))
         self.timer_label.configure(text=f"{e//60:02d}:{e%60:02d}")
         self.after(1000, self._tick_timer)
 
     def stop_rec(self):
-        self.recording = False
+        self.recording = False; self.paused = False
         if self.stream: self.stream.stop(); self.stream.close()
         self.waveform.stop()
+        self.pause_btn.pack_forget()
+        self.import_btn.pack(side="left", padx=(8, 0))
         self.record_btn.configure(text="🎙  Record", fg_color=RED, hover_color="#c93550", state="disabled")
         self.timer_label.configure(text="")
         self.set_status("⏳ Translating...")
